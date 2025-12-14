@@ -1,3 +1,4 @@
+import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -6,7 +7,7 @@ import cv2
 import numpy as np
 import torch
 import torch.nn as nn
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile, Request
 from pydantic import BaseModel
 from torchvision import models
 
@@ -19,6 +20,9 @@ from train.utils import (
     load_config,
     load_joblib,
 )
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+LOGGER = logging.getLogger("server")
 
 app = FastAPI(title="Face Mask Detection API", version="1.0")
 
@@ -37,7 +41,9 @@ LABEL_MAP = {0: "not_masked", 1: "masked"}
 
 class PredictionResponse(BaseModel):
     prediction: str
-    probability: float
+    probability: float  # probability of masked (backward compatible)
+    probability_masked: float
+    probability_not_masked: float
     model: str
     details: Dict[str, Any]
 
@@ -118,7 +124,7 @@ def _load_third():
     return _THIRD_CACHE
 
 
-def _predict_classical(image: np.ndarray) -> Tuple[int, float, Dict[str, Any]]:
+def _predict_classical(image: np.ndarray) -> Tuple[int, float, float, Dict[str, Any]]:
     artifact = _load_classical()
     face_detected = False
     bbox = None
@@ -132,12 +138,14 @@ def _predict_classical(image: np.ndarray) -> Tuple[int, float, Dict[str, Any]]:
         cells_per_block=tuple(artifact["hog_params"].get("cells_per_block", (2, 2))),
     )
     feat_scaled = artifact["scaler"].transform([features]) if artifact["scaler"] is not None else [features]
-    prob = artifact["model"].predict_proba(feat_scaled)[0, 1] if artifact["model"] is not None else 0.5
-    pred = int(prob >= 0.5)
-    return pred, float(prob), {"face_detected": face_detected, "face_bbox": bbox}
+    proba = artifact["model"].predict_proba(feat_scaled)[0] if artifact["model"] is not None else np.array([0.5, 0.5])
+    prob_not_masked = float(proba[0])
+    prob_masked = float(proba[1])
+    pred = int(prob_masked >= 0.5)
+    return pred, prob_masked, prob_not_masked, {"face_detected": face_detected, "face_bbox": bbox}
 
 
-def _predict_dl(image: np.ndarray) -> Tuple[int, float, Dict[str, Any]]:
+def _predict_dl(image: np.ndarray) -> Tuple[int, float, float, Dict[str, Any]]:
     model, cfg = _load_dl()
     face_detected = False
     bbox = None
@@ -147,12 +155,13 @@ def _predict_dl(image: np.ndarray) -> Tuple[int, float, Dict[str, Any]]:
     tensor = transform(image=image)["image"].unsqueeze(0).to(DEVICE)
     with torch.no_grad():
         outputs = model(tensor).squeeze()
-        prob = torch.sigmoid(outputs).item() if not isinstance(model, torch.nn.Identity) else 0.5
-    pred = int(prob >= 0.5)
-    return pred, float(prob), {"face_detected": face_detected, "face_bbox": bbox}
+        prob_masked = torch.sigmoid(outputs).item() if not isinstance(model, torch.nn.Identity) else 0.5
+    prob_not_masked = float(1.0 - prob_masked)
+    pred = int(prob_masked >= 0.5)
+    return pred, float(prob_masked), prob_not_masked, {"face_detected": face_detected, "face_bbox": bbox}
 
 
-def _predict_third(image: np.ndarray) -> Tuple[int, float, Dict[str, Any]]:
+def _predict_third(image: np.ndarray) -> Tuple[int, float, float, Dict[str, Any]]:
     cache = _load_third()
     extractor = cache["extractor"]
     artifact = cache["artifact"]
@@ -165,38 +174,52 @@ def _predict_third(image: np.ndarray) -> Tuple[int, float, Dict[str, Any]]:
     with torch.no_grad():
         feat = extractor(tensor).squeeze().cpu().numpy()
     feat_scaled = artifact["scaler"].transform([feat]) if artifact["scaler"] is not None else [feat]
-    prob = artifact["classifier"].predict_proba(feat_scaled)[0, 1] if artifact["classifier"] is not None else 0.5
-    pred = int(prob >= 0.5)
-    return pred, float(prob), {"face_detected": face_detected, "face_bbox": bbox}
+    proba = artifact["classifier"].predict_proba(feat_scaled)[0] if artifact["classifier"] is not None else np.array([0.5, 0.5])
+    prob_not_masked = float(proba[0])
+    prob_masked = float(proba[1])
+    pred = int(prob_masked >= 0.5)
+    return pred, prob_masked, prob_not_masked, {"face_detected": face_detected, "face_bbox": bbox}
 
 
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(
+    request: Request,
     image: UploadFile = File(..., description="Image file (png, jpg)"),
     model: str = Query("dl", pattern="^(classical|dl|third)$"),
 ):
     try:
         raw = await image.read()
         np_image = _load_image_from_bytes(raw)
+        LOGGER.info("Request %s model=%s size=%s bytes", request.client.host if request.client else "?", model, len(raw))
     except Exception as exc:
+        LOGGER.exception("Invalid image file: %s", exc)
         raise HTTPException(status_code=400, detail=f"Invalid image file: {exc}")
 
     try:
         if model == "classical":
-            pred, prob, details = _predict_classical(np_image)
+            pred, prob_masked, prob_not_masked, details = _predict_classical(np_image)
         elif model == "third":
-            pred, prob, details = _predict_third(np_image)
+            pred, prob_masked, prob_not_masked, details = _predict_third(np_image)
         else:
-            pred, prob, details = _predict_dl(np_image)
+            pred, prob_masked, prob_not_masked, details = _predict_dl(np_image)
     except FileNotFoundError as exc:
+        LOGGER.error("Model missing (%s): %s", model, exc)
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
+        LOGGER.exception("Inference failed for model=%s", model)
         raise HTTPException(status_code=500, detail=f"Inference failed: {exc}")
 
-    return PredictionResponse(
+    prob_masked = float(np.clip(prob_masked, 0.0, 1.0))
+    prob_not_masked = float(np.clip(prob_not_masked, 0.0, 1.0))
+
+    resp = PredictionResponse(
         prediction=LABEL_MAP[pred],
-        probability=prob,
+        probability=prob_masked,  # backward compatible
+        probability_masked=prob_masked,
+        probability_not_masked=prob_not_masked,
         model=model,
         details=details,
     )
+    LOGGER.info("Response model=%s pred=%s prob=%.4f details=%s", model, resp.prediction, resp.probability, resp.details)
+    return resp
 
