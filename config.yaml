@@ -1,0 +1,36 @@
+paths:
+  dataset_root: "Face Mask Dataset"
+  train_dir: "Train"
+  val_dir: "Validation"
+  test_dir: "Test"
+  models_dir: "models"
+  logs_dir: "logs"
+  outputs_dir: "outputs"
+
+training:
+  seed: 42
+  num_workers: 2
+  classical:
+    img_size: 128
+    hog_orientations: 9
+    pixels_per_cell: [8, 8]
+    cells_per_block: [2, 2]
+    C: 1.0
+  dl:
+    model_name: "mobilenet_v2"
+    img_size: 224
+    batch_size: 32
+    lr: 0.0003
+    weight_decay: 0.0001
+    epochs: 20
+    early_stopping_patience: 5
+    lr_patience: 2
+  third:
+    img_size: 224
+    batch_size: 64
+    lr: 0.001
+    epochs: 8
+
+inference:
+  face_detection: true
+

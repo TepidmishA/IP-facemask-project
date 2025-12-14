@@ -1,0 +1,202 @@
+import os
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
+
+import cv2
+import numpy as np
+import torch
+import torch.nn as nn
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from pydantic import BaseModel
+from torchvision import models
+
+from train.utils import (
+    CLASS_ID_TO_NAME,
+    detect_and_crop_face,
+    extract_hog_features,
+    get_device,
+    get_transforms,
+    load_config,
+    load_joblib,
+)
+
+app = FastAPI(title="Face Mask Detection API", version="1.0")
+
+CONFIG = load_config("config.yaml")
+PATHS = CONFIG["paths"]
+DEVICE = get_device()
+USE_DUMMY_MODELS = os.getenv("USE_DUMMY_MODELS", "0") == "1"
+
+_CLASSICAL_CACHE: Optional[Dict[str, Any]] = None
+_DL_MODEL: Optional[torch.nn.Module] = None
+_DL_CFG: Optional[Dict[str, Any]] = None
+_THIRD_CACHE: Optional[Dict[str, Any]] = None
+
+LABEL_MAP = {0: "not_masked", 1: "masked"}
+
+
+class PredictionResponse(BaseModel):
+    prediction: str
+    probability: float
+    model: str
+    details: Dict[str, Any]
+
+
+def _load_image_from_bytes(data: bytes) -> np.ndarray:
+    arr = np.frombuffer(data, dtype=np.uint8)
+    img_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img_bgr is None:
+        raise ValueError("Cannot decode image")
+    return cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+
+
+def _load_classical():
+    global _CLASSICAL_CACHE
+    if _CLASSICAL_CACHE is not None:
+        return _CLASSICAL_CACHE
+    if USE_DUMMY_MODELS:
+        _CLASSICAL_CACHE = {
+            "model": None,
+            "scaler": None,
+            "img_size": 128,
+            "apply_face_crop": False,
+            "hog_params": {},
+        }
+        return _CLASSICAL_CACHE
+    path = Path(PATHS["models_dir"]) / "classical.joblib"
+    if not path.exists():
+        raise FileNotFoundError("Classical model not found. Train it first.")
+    _CLASSICAL_CACHE = load_joblib(path)
+    return _CLASSICAL_CACHE
+
+
+def _load_dl():
+    global _DL_MODEL, _DL_CFG
+    if _DL_MODEL is not None:
+        return _DL_MODEL, _DL_CFG
+    if USE_DUMMY_MODELS:
+        _DL_MODEL = torch.nn.Identity()
+        _DL_CFG = {"img_size": 224, "apply_face_crop": False}
+        return _DL_MODEL, _DL_CFG
+    path = Path(PATHS["models_dir"]) / "dl_best.pth"
+    if not path.exists():
+        raise FileNotFoundError("DL model not found. Train it first.")
+    checkpoint = torch.load(path, map_location=DEVICE)
+    model = models.mobilenet_v2(weights=None)
+    in_features = model.classifier[1].in_features
+    model.classifier[1] = nn.Linear(in_features, 1)
+    model.load_state_dict(checkpoint["state_dict"])
+    model.to(DEVICE).eval()
+    _DL_MODEL = model
+    _DL_CFG = {"img_size": checkpoint.get("img_size", 224), "apply_face_crop": checkpoint.get("apply_face_crop", True)}
+    return _DL_MODEL, _DL_CFG
+
+
+def _load_third():
+    global _THIRD_CACHE
+    if _THIRD_CACHE is not None:
+        return _THIRD_CACHE
+    if USE_DUMMY_MODELS:
+        _THIRD_CACHE = {
+            "extractor": torch.nn.Identity(),
+            "artifact": {
+                "classifier": None,
+                "scaler": None,
+                "img_size": 224,
+                "apply_face_crop": False,
+            },
+        }
+        return _THIRD_CACHE
+    path = Path(PATHS["models_dir"]) / "third_hybrid.joblib"
+    if not path.exists():
+        raise FileNotFoundError("Hybrid model not found. Train it first.")
+    artifact = load_joblib(path)
+    extractor = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
+    extractor.fc = nn.Identity()
+    extractor.to(DEVICE).eval()
+    _THIRD_CACHE = {"extractor": extractor, "artifact": artifact}
+    return _THIRD_CACHE
+
+
+def _predict_classical(image: np.ndarray) -> Tuple[int, float, Dict[str, Any]]:
+    artifact = _load_classical()
+    face_detected = False
+    bbox = None
+    if artifact.get("apply_face_crop", False):
+        image, face_detected, bbox = detect_and_crop_face(image)
+    features = extract_hog_features(
+        image,
+        img_size=artifact["img_size"],
+        orientations=artifact["hog_params"].get("orientations", 9),
+        pixels_per_cell=tuple(artifact["hog_params"].get("pixels_per_cell", (8, 8))),
+        cells_per_block=tuple(artifact["hog_params"].get("cells_per_block", (2, 2))),
+    )
+    feat_scaled = artifact["scaler"].transform([features]) if artifact["scaler"] is not None else [features]
+    prob = artifact["model"].predict_proba(feat_scaled)[0, 1] if artifact["model"] is not None else 0.5
+    pred = int(prob >= 0.5)
+    return pred, float(prob), {"face_detected": face_detected, "face_bbox": bbox}
+
+
+def _predict_dl(image: np.ndarray) -> Tuple[int, float, Dict[str, Any]]:
+    model, cfg = _load_dl()
+    face_detected = False
+    bbox = None
+    if cfg.get("apply_face_crop", False):
+        image, face_detected, bbox = detect_and_crop_face(image)
+    transform = get_transforms(img_size=cfg["img_size"], augment=False)
+    tensor = transform(image=image)["image"].unsqueeze(0).to(DEVICE)
+    with torch.no_grad():
+        outputs = model(tensor).squeeze()
+        prob = torch.sigmoid(outputs).item() if not isinstance(model, torch.nn.Identity) else 0.5
+    pred = int(prob >= 0.5)
+    return pred, float(prob), {"face_detected": face_detected, "face_bbox": bbox}
+
+
+def _predict_third(image: np.ndarray) -> Tuple[int, float, Dict[str, Any]]:
+    cache = _load_third()
+    extractor = cache["extractor"]
+    artifact = cache["artifact"]
+    face_detected = False
+    bbox = None
+    if artifact.get("apply_face_crop", False):
+        image, face_detected, bbox = detect_and_crop_face(image)
+    transform = get_transforms(img_size=artifact["img_size"], augment=False)
+    tensor = transform(image=image)["image"].unsqueeze(0).to(DEVICE)
+    with torch.no_grad():
+        feat = extractor(tensor).squeeze().cpu().numpy()
+    feat_scaled = artifact["scaler"].transform([feat]) if artifact["scaler"] is not None else [feat]
+    prob = artifact["classifier"].predict_proba(feat_scaled)[0, 1] if artifact["classifier"] is not None else 0.5
+    pred = int(prob >= 0.5)
+    return pred, float(prob), {"face_detected": face_detected, "face_bbox": bbox}
+
+
+@app.post("/predict", response_model=PredictionResponse)
+async def predict(
+    image: UploadFile = File(..., description="Image file (png, jpg)"),
+    model: str = Query("dl", pattern="^(classical|dl|third)$"),
+):
+    try:
+        raw = await image.read()
+        np_image = _load_image_from_bytes(raw)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid image file: {exc}")
+
+    try:
+        if model == "classical":
+            pred, prob, details = _predict_classical(np_image)
+        elif model == "third":
+            pred, prob, details = _predict_third(np_image)
+        else:
+            pred, prob, details = _predict_dl(np_image)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Inference failed: {exc}")
+
+    return PredictionResponse(
+        prediction=LABEL_MAP[pred],
+        probability=prob,
+        model=model,
+        details=details,
+    )
+
