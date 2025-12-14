@@ -44,7 +44,7 @@ def build_keyboard(selected: str = DEFAULT_MODEL):
             ],
             [
                 InlineKeyboardButton(label("third", "ResNet18+LR"), callback_data="set:third"),
-                InlineKeyboardButton(label("compare", "Все 3"), callback_data="compare"),
+                InlineKeyboardButton(label("compare", "Сравнить модели"), callback_data="compare"),
             ],
             [
                 InlineKeyboardButton("Описание моделей", callback_data="info"),
@@ -107,16 +107,30 @@ async def button_handler(update: Update, context: CallbackContext):
     elif data == "compare":
         context.user_data["model"] = "compare"
         await query.edit_message_text(
-            text="Режим сравнения: следующее фото будет обработано тремя моделями.",
+            text="Режим сравнения: следующее изображение будет обработано всеми моделями, результаты вернутся списком.",
             reply_markup=build_keyboard("compare"),
         )
     elif data == "info":
         await query.edit_message_text(
             text=(
-                "Описание моделей:\n"
-                "DL (MobileNetV2): сверточная сеть, fine-tune, сигмоидная бинарная голова.\n"
-                "Classical (HOG+LR): признаки HOG → StandardScaler → Logistic Regression.\n"
-                "ResNet18+LR: эмбеддинг ResNet18 (ImageNet) → StandardScaler → Logistic Regression."
+                "Общий препроцессинг:\n"
+                "  • Выделение контуров лица\n"
+                "  • Resize / Normalize\n"
+                "\n"
+                "DL (MobileNetV2):\n"
+                "  • Признаки: Embedding MobileNetV2 (ImageNet)\n"
+                "  • Нормализация: Batch Normalization (BN)\n"
+                "  • Классификатор: Linear + Sigmoid (binary)\n"
+                "\n"
+                "Classical (HOG+LR):\n"
+                "  • Признаки: HOG\n"
+                "  • Нормализация: StandardScaler\n"
+                "  • Классификатор: Logistic Regression\n"
+                "\n"
+                "ResNet18+LR:\n"
+                "  • Признаки: Embedding ResNet18 (ImageNet)\n"
+                "  • Нормализация: StandardScaler\n"
+                "  • Классификатор: Logistic Regression"
             ),
             reply_markup=build_keyboard(context.user_data.get("model", DEFAULT_MODEL)),
         )
@@ -195,9 +209,9 @@ async def handle_photo(update: Update, context: CallbackContext):
             for m in ["dl", "classical", "third"]:
                 if m in results:
                     tag = {
-                        "dl": "🤖 DL",
-                        "classical": "📐 Classical",
-                        "third": "🧠 ResNet18+LR",
+                        "dl": "  DL",
+                        "classical": "  Classical",
+                        "third": "  ResNet18+LR",
                     }.get(m, m)
                     lines.append(f"{tag}: {format_result(results[m])}")
                 else:
