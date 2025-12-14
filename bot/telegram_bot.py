@@ -5,6 +5,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 import requests
+from PIL import Image, ImageDraw
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -56,10 +57,9 @@ def build_keyboard(selected: str = DEFAULT_MODEL):
 async def start(update: Update, context: CallbackContext):
     context.user_data["model"] = DEFAULT_MODEL
     text = (
-        "Привет! Отправь фото лица, я скажу, есть ли маска.\n"
-        "Выбирай модель кнопками или командой /model <dl|classical|third>.\n"
-        "По умолчанию — DL (transfer learning).\n"
-        "Кнопка «Все 3» прогонит фото через все модели."
+        "Привет! Отправь фото лица, я скажу, есть ли на нём маска.\n"
+        "Выбирай модель кнопками. По умолчанию — DL (MobileNetV2).\n"
+        "Кнопка «Все модели» прогонит фото через все модели."
     )
     await update.message.reply_text(text, reply_markup=build_keyboard(DEFAULT_MODEL))
 
@@ -169,6 +169,32 @@ def compare_all_models(image_path: str):
     return results, errors
 
 
+# TODO: bbox overlay feature disabled temporarily.
+# def extract_bbox(result: dict):
+#     details = result.get("details", {}) if isinstance(result, dict) else {}
+#     bbox = details.get("face_bbox")
+#     if bbox and len(bbox) == 4:
+#         try:
+#             x, y, w, h = [int(v) for v in bbox]
+#             return x, y, w, h
+#         except Exception:
+#             return None
+#     return None
+#
+#
+# def draw_face_box(src_path: str, bbox) -> str:
+#     x, y, w, h = bbox
+#     with Image.open(src_path) as img:
+#         draw = ImageDraw.Draw(img)
+#         rect = [x, y, x + w, y + h]
+#         draw.rectangle(rect, outline="red", width=4)
+#         out = NamedTemporaryFile(suffix=Path(src_path).suffix or ".jpg", delete=False)
+#         out_path = out.name
+#         out.close()
+#         img.save(out_path)
+#     return out_path
+
+
 def format_result(result: dict) -> str:
     p_mask = float(result.get("probability_masked", result.get("probability", 0))) * 100
     p_no = float(result.get("probability_not_masked", max(0.0, 1.0 - result.get("probability_masked", 0)))) * 100
@@ -217,14 +243,16 @@ async def handle_photo(update: Update, context: CallbackContext):
                 else:
                     lines.append(f"{m}: error — {errors.get(m)}")
             await update.message.reply_text(
-                "📊 Результаты сравнения:\n" + "\n".join(lines),
+                "Результаты сравнения:\n" + "\n".join(lines),
                 reply_markup=build_keyboard("compare"),
             )
+            # bbox overlay disabled temporarily
         else:
             try:
                 result = await asyncio.get_event_loop().run_in_executor(None, call_server, tmp_path, model)
                 text = format_result(result)
                 await update.message.reply_text(text, reply_markup=build_keyboard(model))
+                # bbox overlay disabled temporarily
             except Exception as exc:
                 msg = extract_error(exc)
                 LOGGER.exception("Failed single-model request: %s", msg)
@@ -277,11 +305,13 @@ async def handle_document(update: Update, context: CallbackContext):
                 "Результаты сравнения:\n" + "\n".join(lines),
                 reply_markup=build_keyboard("compare"),
             )
+            # bbox overlay disabled temporarily
         else:
             try:
                 result = await asyncio.get_event_loop().run_in_executor(None, call_server, tmp_path, model)
                 text = format_result(result)
                 await update.message.reply_text(text, reply_markup=build_keyboard(model))
+                # bbox overlay disabled temporarily
             except Exception as exc:
                 msg = extract_error(exc)
                 LOGGER.exception("Failed single-model request: %s", msg)
