@@ -1,5 +1,5 @@
 paths:
-  dataset_root: "Face Mask Dataset"
+  dataset_root: "Face_Mask_Dataset"
   train_dir: "Train"
   val_dir: "Validation"
   test_dir: "Test"

@@ -13,6 +13,12 @@ from telegram.ext import (
     filters,
 )
 
+import dotenv
+for env_path in ['.env', '../.env', '../../.env']:
+    if os.path.exists(env_path):
+        dotenv.load_dotenv(env_path)
+        break
+
 DEFAULT_MODEL = "dl"
 SERVER_URL = os.getenv("SERVER_URL", "http://localhost:8000/predict")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -83,21 +89,27 @@ async def handle_photo(update: Update, context: CallbackContext):
         return
     photo = update.message.photo[-1]
     file = await photo.get_file()
-    with NamedTemporaryFile(suffix=".jpg", delete=True) as tmp:
-        await file.download_to_drive(tmp.name)
+    # On Windows, NamedTemporaryFile keeps the handle open; close before writing.
+    tmp = NamedTemporaryFile(suffix=".jpg", delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+    try:
+        await file.download_to_drive(tmp_path)
+        result = await asyncio.get_event_loop().run_in_executor(None, call_server, tmp_path, model)
+        prob = result.get("probability", 0) * 100
+        prediction = result.get("prediction", "unknown")
+        if prediction in {"masked", "with_mask"}:
+            text = f"Человек в маске ✅ (confidence: {prob:.1f}%)"
+        else:
+            text = f"Человек без маски ❌ (confidence: {prob:.1f}%)"
+        await update.message.reply_text(text)
+    except Exception as exc:
+        await update.message.reply_text(f"Ошибка: {exc}")
+    finally:
         try:
-            result = await asyncio.get_event_loop().run_in_executor(None, call_server, tmp.name, model)
-            prob = result.get("probability", 0) * 100
-            prediction = result.get("prediction", "unknown")
-            if prediction == "masked":
-                text = f"Человек в маске ✅ (confidence: {prob:.1f}%)"
-            elif prediction in {"with_mask", "masked"}:
-                text = f"Человек в маске ✅ (confidence: {prob:.1f}%)"
-            else:
-                text = f"Человек без маски ❌ (confidence: {prob:.1f}%)"
-            await update.message.reply_text(text)
-        except Exception as exc:
-            await update.message.reply_text(f"Ошибка: {exc}")
+            os.remove(tmp_path)
+        except OSError:
+            pass
 
 
 def main():

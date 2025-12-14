@@ -238,6 +238,11 @@ def load_split_images(
                 metas.append({"path": str(img_path), "face_detected": face_detected, "bbox": bbox})
             except Exception as exc:
                 LOGGER.warning("Skipping image %s due to error: %s", img_path, exc)
+    if len(x_list) == 0:
+        raise RuntimeError(
+            f"No images found for split '{split}' under '{split_dir}'. "
+            "Check dataset_root and directory names (expected subfolders WithMask/WithoutMask)."
+        )
     return np.array(x_list), np.array(y_list), metas
 
 

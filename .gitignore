@@ -1,4 +1,4 @@
 .venv
+.env
 Face_Mask_Dataset
-models
 outputs
