@@ -1,17 +1,16 @@
 # Face Mask Detection (Telegram + FastAPI)
 
-Полный пример клиент–серверного приложения на Python для классификации ношения маски по фото. Используется датасет `Face Mask Dataset/` (подпапки `Train/`, `Validation/`, `Test/` с классами `WithMask` и `WithoutMask`).
+Полный пример клиент–серверного приложения на Python для классификации ношения маски по фото. Используется датасет `Face Mask Dataset` с классами `WithMask` и `WithoutMask`.
 
 ## Структура проекта
 - `config.yaml` — пути и основные гиперпараметры.
-- `notebooks/01_data_exploration.ipynb` — EDA: баланс классов, повреждения, размеры, детекция лиц, выбросы.
 - `train/` — скрипты обучения:
-  - `train_classical.py` — HOG + LogisticRegression.
-  - `train_dl.py` — MobileNetV2 (transfer learning).
-  - `train_third.py` — ResNet18 embeddings + LogisticRegression.
+  - `train_hog_lr.py` — HOG + LogisticRegression.
+  - `train_mobilenet_v2.py` — MobileNetV2 (transfer learning).
+  - `train_resnet18_lr.py` — ResNet18 embeddings + LogisticRegression.
   - `utils.py` — датасеты, метрики, аугментации, HOG, детектор лиц.
 - `eval/evaluate_models.py` — оценка на тесте, метрики, ROC/CM.
-- `server/app.py` — FastAPI с `/predict` (`model=classical|dl|third`).
+- `server/app.py` — FastAPI с `/predict` (`model=hog_lr|mobilenet_v2|resnet18_lr`).
 - `bot/telegram_bot.py` — Telegram-бот (polling), пересылает фото на сервер.
 - `models/` — сохраняются веса и артефакты моделей.
 - `tests/` — базовые тесты (детектор лица, endpoint схемы).
@@ -31,17 +30,17 @@ pip install -r requirements.txt
 
 Классический пайплайн (HOG + LogisticRegression):
 ```bash
-python train/train_classical.py --apply-face-crop
+python train/train_hog_lr.py --apply-face-crop
 ```
 
 Глубокая модель (MobileNetV2, transfer learning):
 ```bash
-python train/train_dl.py --epochs 20 --batch-size 32 --img-size 224
+python train/train_mobilenet_v2.py --epochs 20 --batch-size 32 --img-size 224
 ```
 
 Гибрид (ResNet18 embeddings + LogisticRegression):
 ```bash
-python train/train_third.py --img-size 224 --batch-size 64
+python train/train_resnet18_lr.py --img-size 224 --batch-size 64
 ```
 
 Логи и метрики сохраняются в `logs/` и `outputs/`, лучшие веса — в `models/`.
@@ -56,20 +55,6 @@ python eval/evaluate_models.py --model all
 ```bash
 uvicorn server.app:app --host 0.0.0.0 --port 8000
 ```
-Эндпоинт:
-```
-POST /predict?model=dl
-Form-Data: image=<файл>
-```
-Ответ:
-```json
-{
-  "prediction": "masked",
-  "probability": 0.92,
-  "model": "dl",
-  "details": { "face_detected": true, "face_bbox": [x, y, w, h] }
-}
-```
 
 ## Запуск Telegram-бота
 1. Создайте `.env` или экспортируйте переменные:
@@ -79,21 +64,4 @@ Form-Data: image=<файл>
 ```bash
 python bot/telegram_bot.py
 ```
-Команды: `/start`, `/help`, `/model dl|classical|third`. На фото бот отвечает: «Человек в маске ✅ (confidence: 92%)».
-
-## Тесты
-```bash
-pytest -q
-```
-Тесты используют флаг `USE_DUMMY_MODELS=1`, поэтому тяжелые веса не требуются.
-
-## Рекомендации
-- При дисбалансе классов используйте веса (`class_weight`) и аугментации (включены в DL-скрипт).
-- Если детектор лиц часто ошибается, оставляйте fallback на полный кадр (реализовано).
-- Для репродюсируемости фиксированы seed, сохранены логи и конфиги.
-
-## Возможные расширения
-- Экспорт модели в ONNX (добавить в `train/train_dl.py`).
-- Dockerfile для сервера и бота.
-- MLflow/W&B трекинг.
-
+Команды: `/start`, `/help`, `/model mobilenet_v2|hog_lr|resnet18_lr`. На фото бот отвечает результатами классификации с вероятностями.

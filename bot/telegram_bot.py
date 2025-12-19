@@ -22,7 +22,7 @@ for env_path in ['.env', '../.env', '../../.env']:
         dotenv.load_dotenv(env_path)
         break
 
-DEFAULT_MODEL = "dl"
+DEFAULT_MODEL = "mobilenet_v2"
 SERVER_URL = os.getenv("SERVER_URL", "http://localhost:8000/predict")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -40,11 +40,11 @@ def build_keyboard(selected: str = DEFAULT_MODEL):
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton(label("dl", "DL (MobileNetV2)"), callback_data="set:dl"),
-                InlineKeyboardButton(label("classical", "Classical (HOG+LR)"), callback_data="set:classical"),
+                InlineKeyboardButton(label("mobilenet_v2", "MobileNetV2"), callback_data="set:mobilenet_v2"),
+                InlineKeyboardButton(label("hog_lr", "HOG+LR"), callback_data="set:hog_lr"),
             ],
             [
-                InlineKeyboardButton(label("third", "ResNet18+LR"), callback_data="set:third"),
+                InlineKeyboardButton(label("resnet18_lr", "ResNet18+LR"), callback_data="set:resnet18_lr"),
                 InlineKeyboardButton(label("compare", "Сравнить модели"), callback_data="compare"),
             ],
             [
@@ -58,7 +58,7 @@ async def start(update: Update, context: CallbackContext):
     context.user_data["model"] = DEFAULT_MODEL
     text = (
         "Привет! Отправь фото лица, я скажу, есть ли на нём маска.\n"
-        "Выбирай модель кнопками. По умолчанию — DL (MobileNetV2).\n"
+        "Выбирай модель кнопками. По умолчанию — MobileNetV2.\n"
         "Кнопка «Все модели» прогонит фото через все модели."
     )
     await update.message.reply_text(text, reply_markup=build_keyboard(DEFAULT_MODEL))
@@ -67,26 +67,26 @@ async def start(update: Update, context: CallbackContext):
 async def help_cmd(update: Update, context: CallbackContext):
     await update.message.reply_text(
         "Отправь фото лица. Выбор модели:\n"
-        "/model dl — MobileNetV2 transfer (по умолчанию)\n"
-        "/model classical — HOG + логистическая регрессия\n"
-        "/model third — ResNet18 эмбеддинги + логрег\n"
+        "/model mobilenet_v2 — MobileNetV2 transfer (по умолчанию)\n"
+        "/model hog_lr — HOG + логистическая регрессия\n"
+        "/model resnet18_lr — ResNet18 эмбеддинги + логрег\n"
         "Или жми кнопки. «Все 3» — сравнение."
     )
 
 
 async def set_model(update: Update, context: CallbackContext):
     if not context.args:
-        await update.message.reply_text("Укажите модель: dl, classical или third.")
+        await update.message.reply_text("Укажите модель: mobilenet_v2, hog_lr или resnet18_lr.")
         return
     model = context.args[0].strip().lower()
-    if model not in {"dl", "classical", "third"}:
-        await update.message.reply_text("Допустимые значения: dl, classical, third.")
+    if model not in {"mobilenet_v2", "hog_lr", "resnet18_lr"}:
+        await update.message.reply_text("Допустимые значения: mobilenet_v2, hog_lr, resnet18_lr.")
         return
     context.user_data["model"] = model
     pretty = {
-        "dl": "DL (MobileNetV2)",
-        "classical": "Classical (HOG+LR)",
-        "third": "ResNet18+LR",
+        "mobilenet_v2": "MobileNetV2",
+        "hog_lr": "HOG+LR",
+        "resnet18_lr": "ResNet18+LR",
     }.get(model, model)
     await update.message.reply_text(f"Модель установлена: {pretty}", reply_markup=build_keyboard(model))
 
@@ -99,9 +99,9 @@ async def button_handler(update: Update, context: CallbackContext):
         model = data.split(":", 1)[1]
         context.user_data["model"] = model
         pretty = {
-            "dl": "DL (MobileNetV2)",
-            "classical": "Classical (HOG+LR)",
-            "third": "ResNet18+LR",
+            "mobilenet_v2": "MobileNetV2",
+            "hog_lr": "HOG+LR",
+            "resnet18_lr": "ResNet18+LR",
         }.get(model, model)
         await query.edit_message_text(text=f"Модель установлена: {pretty}", reply_markup=build_keyboard(model))
     elif data == "compare":
@@ -117,12 +117,12 @@ async def button_handler(update: Update, context: CallbackContext):
                 "  • Выделение контуров лица\n"
                 "  • Resize / Normalize\n"
                 "\n"
-                "DL (MobileNetV2):\n"
+                "MobileNetV2:\n"
                 "  • Признаки: Embedding MobileNetV2 (ImageNet)\n"
                 "  • Нормализация: Batch Normalization (BN)\n"
                 "  • Классификатор: Linear + Sigmoid (binary)\n"
                 "\n"
-                "Classical (HOG+LR):\n"
+                "HOG+LR:\n"
                 "  • Признаки: HOG\n"
                 "  • Нормализация: StandardScaler\n"
                 "  • Классификатор: Logistic Regression\n"
@@ -160,40 +160,13 @@ def call_server(image_path: str, model: str):
 def compare_all_models(image_path: str):
     results = {}
     errors = {}
-    for model in ["dl", "classical", "third"]:
+    for model in ["mobilenet_v2", "hog_lr", "resnet18_lr"]:
         try:
             results[model] = call_server(image_path, model)
         except Exception as exc:
             LOGGER.exception("Compare failed for model=%s", model)
             errors[model] = str(exc)
     return results, errors
-
-
-# TODO: bbox overlay feature disabled temporarily.
-# def extract_bbox(result: dict):
-#     details = result.get("details", {}) if isinstance(result, dict) else {}
-#     bbox = details.get("face_bbox")
-#     if bbox and len(bbox) == 4:
-#         try:
-#             x, y, w, h = [int(v) for v in bbox]
-#             return x, y, w, h
-#         except Exception:
-#             return None
-#     return None
-#
-#
-# def draw_face_box(src_path: str, bbox) -> str:
-#     x, y, w, h = bbox
-#     with Image.open(src_path) as img:
-#         draw = ImageDraw.Draw(img)
-#         rect = [x, y, x + w, y + h]
-#         draw.rectangle(rect, outline="red", width=4)
-#         out = NamedTemporaryFile(suffix=Path(src_path).suffix or ".jpg", delete=False)
-#         out_path = out.name
-#         out.close()
-#         img.save(out_path)
-#     return out_path
-
 
 def format_result(result: dict) -> str:
     p_mask = float(result.get("probability_masked", result.get("probability", 0))) * 100
@@ -232,12 +205,12 @@ async def handle_photo(update: Update, context: CallbackContext):
         if model == "compare":
             results, errors = await asyncio.get_event_loop().run_in_executor(None, compare_all_models, tmp_path)
             lines = []
-            for m in ["dl", "classical", "third"]:
+            for m in ["mobilenet_v2", "hog_lr", "resnet18_lr"]:
                 if m in results:
                     tag = {
-                        "dl": "  DL",
-                        "classical": "  Classical",
-                        "third": "  ResNet18+LR",
+                        "mobilenet_v2": "  MobileNetV2",
+                        "hog_lr": "  HOG+LR",
+                        "resnet18_lr": "  ResNet18+LR",
                     }.get(m, m)
                     lines.append(f"{tag}: {format_result(results[m])}")
                 else:
@@ -246,13 +219,11 @@ async def handle_photo(update: Update, context: CallbackContext):
                 "Результаты сравнения:\n" + "\n".join(lines),
                 reply_markup=build_keyboard("compare"),
             )
-            # bbox overlay disabled temporarily
         else:
             try:
                 result = await asyncio.get_event_loop().run_in_executor(None, call_server, tmp_path, model)
                 text = format_result(result)
                 await update.message.reply_text(text, reply_markup=build_keyboard(model))
-                # bbox overlay disabled temporarily
             except Exception as exc:
                 msg = extract_error(exc)
                 LOGGER.exception("Failed single-model request: %s", msg)
@@ -291,12 +262,12 @@ async def handle_document(update: Update, context: CallbackContext):
         if model == "compare":
             results, errors = await asyncio.get_event_loop().run_in_executor(None, compare_all_models, tmp_path)
             lines = []
-            for m in ["dl", "classical", "third"]:
+            for m in ["mobilenet_v2", "hog_lr", "resnet18_lr"]:
                 if m in results:
                     tag = {
-                        "dl": "DL",
-                        "classical": "Classical",
-                        "third": "ResNet18+LR",
+                        "mobilenet_v2": "MobileNetV2",
+                        "hog_lr": "HOG+LR",
+                        "resnet18_lr": "ResNet18+LR",
                     }.get(m, m)
                     lines.append(f"{tag}: {format_result(results[m])}")
                 else:
@@ -305,13 +276,11 @@ async def handle_document(update: Update, context: CallbackContext):
                 "Результаты сравнения:\n" + "\n".join(lines),
                 reply_markup=build_keyboard("compare"),
             )
-            # bbox overlay disabled temporarily
         else:
             try:
                 result = await asyncio.get_event_loop().run_in_executor(None, call_server, tmp_path, model)
                 text = format_result(result)
                 await update.message.reply_text(text, reply_markup=build_keyboard(model))
-                # bbox overlay disabled temporarily
             except Exception as exc:
                 msg = extract_error(exc)
                 LOGGER.exception("Failed single-model request: %s", msg)

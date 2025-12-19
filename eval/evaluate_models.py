@@ -34,15 +34,15 @@ def parse_args():
         "--model",
         type=str,
         default="all",
-        choices=["classical", "dl", "third", "all"],
+        choices=["hog_lr", "mobilenet_v2", "resnet18_lr", "all"],
         help="Model to evaluate.",
     )
     return parser.parse_args()
 
 
-def evaluate_classical(config, dataset_root: Path):
+def evaluate_hog_lr(config, dataset_root: Path):
     paths = config["paths"]
-    artifact = load_joblib(Path(paths["models_dir"]) / "classical.joblib")
+    artifact = load_joblib(Path(paths["models_dir"]) / "hog_lr.joblib")
     hog_params = artifact.get("hog_params", {})
     img_size = artifact["img_size"]
     apply_face_crop = artifact.get("apply_face_crop", True)
@@ -60,12 +60,12 @@ def evaluate_classical(config, dataset_root: Path):
     preds = (probs >= 0.5).astype(int)
 
     plot_dir = Path(paths["outputs_dir"]) / "plots"
-    plot_confusion_matrix(y_test, preds, [CLASS_ID_TO_NAME[0], CLASS_ID_TO_NAME[1]], plot_dir / "classical_cm.png")
-    plot_roc_curve(y_test, probs, plot_dir / "classical_roc.png")
+    plot_confusion_matrix(y_test, preds, [CLASS_ID_TO_NAME[0], CLASS_ID_TO_NAME[1]], plot_dir / "hog_lr_cm.png")
+    plot_roc_curve(y_test, probs, plot_dir / "hog_lr_roc.png")
     return metrics
 
 
-def load_dl_model(artifact_path: Path, device):
+def load_mobilenet_v2_model(artifact_path: Path, device):
     checkpoint = torch.load(artifact_path, map_location=device)
     model = models.mobilenet_v2(weights=None)
     in_features = model.classifier[1].in_features
@@ -78,10 +78,10 @@ def load_dl_model(artifact_path: Path, device):
     return model, img_size, apply_face_crop
 
 
-def evaluate_dl(config, dataset_root: Path):
+def evaluate_mobilenet_v2(config, dataset_root: Path):
     paths = config["paths"]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model, img_size, apply_face_crop = load_dl_model(Path(paths["models_dir"]) / "dl_best.pth", device)
+    model, img_size, apply_face_crop = load_mobilenet_v2_model(Path(paths["models_dir"]) / "mobilenet_v2_best.pth", device)
 
     transform = get_transforms(img_size=img_size, augment=False)
     dataset = MaskDataset(dataset_root, split=paths["test_dir"], transform=transform, apply_face_crop=apply_face_crop)
@@ -101,14 +101,14 @@ def evaluate_dl(config, dataset_root: Path):
     metrics = calculate_metrics(y_true, y_prob)
 
     plot_dir = Path(paths["outputs_dir"]) / "plots"
-    plot_confusion_matrix(y_true, preds, [CLASS_ID_TO_NAME[0], CLASS_ID_TO_NAME[1]], plot_dir / "dl_cm.png")
-    plot_roc_curve(y_true, y_prob, plot_dir / "dl_roc.png")
+    plot_confusion_matrix(y_true, preds, [CLASS_ID_TO_NAME[0], CLASS_ID_TO_NAME[1]], plot_dir / "mobilenet_v2_cm.png")
+    plot_roc_curve(y_true, y_prob, plot_dir / "mobilenet_v2_roc.png")
     return metrics
 
 
-def load_third_classifier(config, device):
+def load_resnet18_lr_classifier(config, device):
     paths = config["paths"]
-    artifact = load_joblib(Path(paths["models_dir"]) / "third_hybrid.joblib")
+    artifact = load_joblib(Path(paths["models_dir"]) / "resnet18_lr.joblib")
     backbone_name = artifact.get("backbone", "resnet18")
     if backbone_name != "resnet18":
         raise ValueError("Only resnet18 backbone is supported in this artifact.")
@@ -119,10 +119,10 @@ def load_third_classifier(config, device):
     return model, artifact
 
 
-def evaluate_third(config, dataset_root: Path):
+def evaluate_resnet18_lr(config, dataset_root: Path):
     paths = config["paths"]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    feature_extractor, artifact = load_third_classifier(config, device)
+    feature_extractor, artifact = load_resnet18_lr_classifier(config, device)
     img_size = artifact["img_size"]
     apply_face_crop = artifact.get("apply_face_crop", True)
 
@@ -146,8 +146,8 @@ def evaluate_third(config, dataset_root: Path):
     metrics = calculate_metrics(labels, probs)
 
     plot_dir = Path(paths["outputs_dir"]) / "plots"
-    plot_confusion_matrix(labels, preds, [CLASS_ID_TO_NAME[0], CLASS_ID_TO_NAME[1]], plot_dir / "third_cm.png")
-    plot_roc_curve(labels, probs, plot_dir / "third_roc.png")
+    plot_confusion_matrix(labels, preds, [CLASS_ID_TO_NAME[0], CLASS_ID_TO_NAME[1]], plot_dir / "resnet18_lr_cm.png")
+    plot_roc_curve(labels, probs, plot_dir / "resnet18_lr_roc.png")
     return metrics
 
 
@@ -157,12 +157,12 @@ def main():
     dataset_root = Path(args.dataset_root or config["paths"]["dataset_root"])
 
     results = {}
-    if args.model in ["classical", "all"]:
-        results["classical"] = evaluate_classical(config, dataset_root)
-    if args.model in ["dl", "all"]:
-        results["dl"] = evaluate_dl(config, dataset_root)
-    if args.model in ["third", "all"]:
-        results["third"] = evaluate_third(config, dataset_root)
+    if args.model in ["hog_lr", "all"]:
+        results["hog_lr"] = evaluate_hog_lr(config, dataset_root)
+    if args.model in ["mobilenet_v2", "all"]:
+        results["mobilenet_v2"] = evaluate_mobilenet_v2(config, dataset_root)
+    if args.model in ["resnet18_lr", "all"]:
+        results["resnet18_lr"] = evaluate_resnet18_lr(config, dataset_root)
 
     print(json.dumps(results, indent=2))
     out_path = Path(config["paths"]["outputs_dir"]) / "test_metrics.json"

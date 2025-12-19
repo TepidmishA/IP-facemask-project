@@ -31,10 +31,10 @@ PATHS = CONFIG["paths"]
 DEVICE = get_device()
 USE_DUMMY_MODELS = os.getenv("USE_DUMMY_MODELS", "0") == "1"
 
-_CLASSICAL_CACHE: Optional[Dict[str, Any]] = None
-_DL_MODEL: Optional[torch.nn.Module] = None
-_DL_CFG: Optional[Dict[str, Any]] = None
-_THIRD_CACHE: Optional[Dict[str, Any]] = None
+_HOG_LR_CACHE: Optional[Dict[str, Any]] = None
+_MOBILENET_V2_MODEL: Optional[torch.nn.Module] = None
+_MOBILENET_V2_CFG: Optional[Dict[str, Any]] = None
+_RESNET18_LR_CACHE: Optional[Dict[str, Any]] = None
 
 LABEL_MAP = {0: "not_masked", 1: "masked"}
 
@@ -56,54 +56,54 @@ def _load_image_from_bytes(data: bytes) -> np.ndarray:
     return cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
 
 
-def _load_classical():
-    global _CLASSICAL_CACHE
-    if _CLASSICAL_CACHE is not None:
-        return _CLASSICAL_CACHE
+def _load_hog_lr():
+    global _HOG_LR_CACHE
+    if _HOG_LR_CACHE is not None:
+        return _HOG_LR_CACHE
     if USE_DUMMY_MODELS:
-        _CLASSICAL_CACHE = {
+        _HOG_LR_CACHE = {
             "model": None,
             "scaler": None,
             "img_size": 128,
             "apply_face_crop": False,
             "hog_params": {},
         }
-        return _CLASSICAL_CACHE
-    path = Path(PATHS["models_dir"]) / "classical.joblib"
+        return _HOG_LR_CACHE
+    path = Path(PATHS["models_dir"]) / "hog_lr.joblib"
     if not path.exists():
-        raise FileNotFoundError("Classical model not found. Train it first.")
-    _CLASSICAL_CACHE = load_joblib(path)
-    return _CLASSICAL_CACHE
+        raise FileNotFoundError("HOG+LR model not found. Train it first.")
+    _HOG_LR_CACHE = load_joblib(path)
+    return _HOG_LR_CACHE
 
 
-def _load_dl():
-    global _DL_MODEL, _DL_CFG
-    if _DL_MODEL is not None:
-        return _DL_MODEL, _DL_CFG
+def _load_mobilenet_v2():
+    global _MOBILENET_V2_MODEL, _MOBILENET_V2_CFG
+    if _MOBILENET_V2_MODEL is not None:
+        return _MOBILENET_V2_MODEL, _MOBILENET_V2_CFG
     if USE_DUMMY_MODELS:
-        _DL_MODEL = torch.nn.Identity()
-        _DL_CFG = {"img_size": 224, "apply_face_crop": False}
-        return _DL_MODEL, _DL_CFG
-    path = Path(PATHS["models_dir"]) / "dl_best.pth"
+        _MOBILENET_V2_MODEL = torch.nn.Identity()
+        _MOBILENET_V2_CFG = {"img_size": 224, "apply_face_crop": False}
+        return _MOBILENET_V2_MODEL, _MOBILENET_V2_CFG
+    path = Path(PATHS["models_dir"]) / "mobilenet_v2_best.pth"
     if not path.exists():
-        raise FileNotFoundError("DL model not found. Train it first.")
+        raise FileNotFoundError("MobileNetV2 model not found. Train it first.")
     checkpoint = torch.load(path, map_location=DEVICE)
     model = models.mobilenet_v2(weights=None)
     in_features = model.classifier[1].in_features
     model.classifier[1] = nn.Linear(in_features, 1)
     model.load_state_dict(checkpoint["state_dict"])
     model.to(DEVICE).eval()
-    _DL_MODEL = model
-    _DL_CFG = {"img_size": checkpoint.get("img_size", 224), "apply_face_crop": checkpoint.get("apply_face_crop", True)}
-    return _DL_MODEL, _DL_CFG
+    _MOBILENET_V2_MODEL = model
+    _MOBILENET_V2_CFG = {"img_size": checkpoint.get("img_size", 224), "apply_face_crop": checkpoint.get("apply_face_crop", True)}
+    return _MOBILENET_V2_MODEL, _MOBILENET_V2_CFG
 
 
-def _load_third():
-    global _THIRD_CACHE
-    if _THIRD_CACHE is not None:
-        return _THIRD_CACHE
+def _load_resnet18_lr():
+    global _RESNET18_LR_CACHE
+    if _RESNET18_LR_CACHE is not None:
+        return _RESNET18_LR_CACHE
     if USE_DUMMY_MODELS:
-        _THIRD_CACHE = {
+        _RESNET18_LR_CACHE = {
             "extractor": torch.nn.Identity(),
             "artifact": {
                 "classifier": None,
@@ -112,20 +112,20 @@ def _load_third():
                 "apply_face_crop": False,
             },
         }
-        return _THIRD_CACHE
-    path = Path(PATHS["models_dir"]) / "third_hybrid.joblib"
+        return _RESNET18_LR_CACHE
+    path = Path(PATHS["models_dir"]) / "resnet18_lr.joblib"
     if not path.exists():
-        raise FileNotFoundError("Hybrid model not found. Train it first.")
+        raise FileNotFoundError("ResNet18+LR model not found. Train it first.")
     artifact = load_joblib(path)
     extractor = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
     extractor.fc = nn.Identity()
     extractor.to(DEVICE).eval()
-    _THIRD_CACHE = {"extractor": extractor, "artifact": artifact}
-    return _THIRD_CACHE
+    _RESNET18_LR_CACHE = {"extractor": extractor, "artifact": artifact}
+    return _RESNET18_LR_CACHE
 
 
-def _predict_classical(image: np.ndarray) -> Tuple[int, float, float, Dict[str, Any]]:
-    artifact = _load_classical()
+def _predict_hog_lr(image: np.ndarray) -> Tuple[int, float, float, Dict[str, Any]]:
+    artifact = _load_hog_lr()
     face_detected = False
     bbox = None
     if artifact.get("apply_face_crop", False):
@@ -145,8 +145,8 @@ def _predict_classical(image: np.ndarray) -> Tuple[int, float, float, Dict[str, 
     return pred, prob_masked, prob_not_masked, {"face_detected": face_detected, "face_bbox": bbox}
 
 
-def _predict_dl(image: np.ndarray) -> Tuple[int, float, float, Dict[str, Any]]:
-    model, cfg = _load_dl()
+def _predict_mobilenet_v2(image: np.ndarray) -> Tuple[int, float, float, Dict[str, Any]]:
+    model, cfg = _load_mobilenet_v2()
     face_detected = False
     bbox = None
     if cfg.get("apply_face_crop", False):
@@ -161,8 +161,8 @@ def _predict_dl(image: np.ndarray) -> Tuple[int, float, float, Dict[str, Any]]:
     return pred, float(prob_masked), prob_not_masked, {"face_detected": face_detected, "face_bbox": bbox}
 
 
-def _predict_third(image: np.ndarray) -> Tuple[int, float, float, Dict[str, Any]]:
-    cache = _load_third()
+def _predict_resnet18_lr(image: np.ndarray) -> Tuple[int, float, float, Dict[str, Any]]:
+    cache = _load_resnet18_lr()
     extractor = cache["extractor"]
     artifact = cache["artifact"]
     face_detected = False
@@ -185,7 +185,7 @@ def _predict_third(image: np.ndarray) -> Tuple[int, float, float, Dict[str, Any]
 async def predict(
     request: Request,
     image: UploadFile = File(..., description="Image file (png, jpg)"),
-    model: str = Query("dl", pattern="^(classical|dl|third)$"),
+    model: str = Query("mobilenet_v2", pattern="^(hog_lr|mobilenet_v2|resnet18_lr)$"),
 ):
     try:
         raw = await image.read()
@@ -196,12 +196,12 @@ async def predict(
         raise HTTPException(status_code=400, detail=f"Invalid image file: {exc}")
 
     try:
-        if model == "classical":
-            pred, prob_masked, prob_not_masked, details = _predict_classical(np_image)
-        elif model == "third":
-            pred, prob_masked, prob_not_masked, details = _predict_third(np_image)
+        if model == "hog_lr":
+            pred, prob_masked, prob_not_masked, details = _predict_hog_lr(np_image)
+        elif model == "resnet18_lr":
+            pred, prob_masked, prob_not_masked, details = _predict_resnet18_lr(np_image)
         else:
-            pred, prob_masked, prob_not_masked, details = _predict_dl(np_image)
+            pred, prob_masked, prob_not_masked, details = _predict_mobilenet_v2(np_image)
     except FileNotFoundError as exc:
         LOGGER.error("Model missing (%s): %s", model, exc)
         raise HTTPException(status_code=503, detail=str(exc))

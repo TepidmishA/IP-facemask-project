@@ -10,14 +10,13 @@ paths:
 training:
   seed: 42
   num_workers: 2
-  classical:
+  hog_lr:
     img_size: 128
     hog_orientations: 9
     pixels_per_cell: [8, 8]
     cells_per_block: [2, 2]
     C: 1.0
-  dl:
-    model_name: "mobilenet_v2"
+  mobilenet_v2:
     img_size: 224
     batch_size: 32
     lr: 0.0003
@@ -25,7 +24,7 @@ training:
     epochs: 20
     early_stopping_patience: 5
     lr_patience: 2
-  third:
+  resnet18_lr:
     img_size: 224
     batch_size: 64
     lr: 0.001
@@ -33,4 +32,3 @@ training:
 
 inference:
   face_detection: true
-
