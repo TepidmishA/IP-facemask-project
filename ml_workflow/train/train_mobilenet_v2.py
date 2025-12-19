@@ -12,7 +12,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torchvision import models
 from tqdm import tqdm
 
-from train.utils import (
+from ml_workflow.train.utils import (
     CLASS_ID_TO_NAME,
     build_dataloaders,
     calculate_metrics,

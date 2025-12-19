@@ -11,7 +11,7 @@ from fastapi import FastAPI, File, HTTPException, Query, UploadFile, Request
 from pydantic import BaseModel
 from torchvision import models
 
-from train.utils import (
+from ml_workflow.train.utils import (
     CLASS_ID_TO_NAME,
     detect_and_crop_face,
     extract_hog_features,

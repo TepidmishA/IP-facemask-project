@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from torchvision import models
 from tqdm import tqdm
 
-from utils import (
+from ml_workflow.train.utils import (
     CLASS_ID_TO_NAME,
     MaskDataset,
     calculate_metrics,

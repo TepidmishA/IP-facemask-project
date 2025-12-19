@@ -7,7 +7,7 @@ import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
-from utils import (
+from ml_workflow.train.utils import (
     CLASS_ID_TO_NAME,
     calculate_metrics,
     detect_and_crop_face,

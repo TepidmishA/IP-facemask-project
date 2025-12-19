@@ -3,7 +3,7 @@ paths:
   train_dir: "Train"
   val_dir: "Validation"
   test_dir: "Test"
-  models_dir: "models"
+  models_dir: "ml_workflow/models"
   logs_dir: "logs"
   outputs_dir: "outputs"
 
